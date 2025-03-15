@@ -1,0 +1,29 @@
+[project]
+name = "snakemake-executor-plugin-ssh"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+dependencies = ["snakemake-interface-common (>=1.17.4,<2.0.0)", "snakemake-interface-executor-plugins (>=9.3.3,<10.0.0)"]
+repository = "https://github.com/your/plugin"
+documentation = "https://snakemake.github.io/snakemake-plugin-catalog/plugins/executor/ssh.html"
+[[project.authors]]
+name = "Johannes Koester"
+email = "johannes.koester@uni-due.de"
+
+[build-system]
+requires = [ "poetry-core>=2.0.0,<3.0.0",]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+[[tool.poetry.packages]]
+include = "snakemake_executor_plugin_ssh"
+from = "src"
+
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.11.0"
+coverage = "^7.6.12"
+pytest = "^8.3.5"
+snakemake = "^9.0.1"
+
