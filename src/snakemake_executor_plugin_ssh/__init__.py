@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess as sp
 from dataclasses import dataclass, field
-from typing import Any, Iterable, List, Generator, Optional
+from typing import Any, AsyncGenerator, Iterable, List, Generator, Optional
 import uuid
 from immutables import Map
 from snakemake_interface_executor_plugins.executors.base import SubmittedJobInfo
@@ -160,7 +160,7 @@ class Executor(RemoteExecutor):
 
     async def check_active_jobs(
         self, active_jobs: List[SubmittedJobInfo]
-    ) -> Generator[SubmittedJobInfo, None, None]:
+    ) -> AsyncGenerator[SubmittedJobInfo, None]:
         # Check the status of active jobs.
 
         # You have to iterate over the given list active_jobs.
@@ -190,6 +190,8 @@ class Executor(RemoteExecutor):
                     self.report_job_success(active_job)
                 else:
                     self.report_job_error(active_job)
+            else:
+                yield active_job
 
     def cancel_jobs(self, active_jobs: List[SubmittedJobInfo]):
         # Cancel all active jobs.
@@ -273,17 +275,16 @@ class Executor(RemoteExecutor):
     def _run_host_mgmt_script(
         self, host: str, cmd: str, run_id: str, data: Optional[str] = None
     ) -> sp.CompletedProcess[bytes]:
-        with StringIO(self.host_info_script) as script:
-            if data is None:
-                data = ""
+        if data is None:
+            data = ""
 
-            return self._run_host_cmd(
-                host,
-                f"bash -c 'mkdir -p {self._script_path.parent}; "
-                f"cat > {self._script_path}; "
-                f"python {host_management.SCRIPT_PATH} {cmd} {run_id} {data}'",
-                stdin=script,
-            )
+        return self._run_host_cmd(
+            host,
+            f"bash -c 'mkdir -p {self._script_path.parent}; "
+            f"cat > {self._script_path}; "
+            f"python {host_management.SCRIPT_PATH} {cmd} {run_id} {data}'",
+            input=self.host_info_script.encode(),
+        )
 
     def _run_host_cmd(
         self, host: str, cmd: str, **kwargs: Any
