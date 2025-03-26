@@ -66,6 +66,7 @@ jobs:
       - name: Setup ssh server
         run: |
           mkdir -p ~/.ssh
+          ssh-keyscan -t rsa @127.0.0.1 >> ~/.ssh/known_hosts
           cp tests/sshserver/testkey.pub ~/.ssh/
           sudo apt-get install openssh-server
           sudo service ssh start
