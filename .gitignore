@@ -1,3 +1,7 @@
-poetry.lock
 __pycache__
 .pytest_cache
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+/tests/sshserver/sshd_config
+pixi.lock

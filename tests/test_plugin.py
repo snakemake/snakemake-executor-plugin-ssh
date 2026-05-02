@@ -19,10 +19,11 @@ class TestWorkflowsBase(snakemake.common.tests.TestWorkflowsBase):
         return "ssh"
 
     def get_executor_settings(self) -> Optional[ExecutorSettingsBase]:
-        # instantiate ExecutorSettings of this plugin as appropriate
         return ExecutorSettings(
-            hosts=["127.0.0.1"],
+            hosts=["localhost:12478"],
             identity_file=IDENTITY_FILE,
+            ssh_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+            "-o IdentitiesOnly=yes",
         )
 
     def get_default_storage_provider(self) -> Optional[str]:

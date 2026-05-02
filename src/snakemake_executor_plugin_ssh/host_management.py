@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from abc import ABC, abstractmethod
 import base64
 from dataclasses import dataclass, field
@@ -49,7 +50,7 @@ class LockManager(ABC):
 
     @property
     def locked(self) -> str:
-        return self.item_path.with_suffix(f"{self.id}.{self.item_suffix()}")
+        return self.item_path.with_suffix(f".{self.id}{self.item_suffix()}")
 
     @property
     def unlocked(self) -> str:
@@ -58,17 +59,37 @@ class LockManager(ABC):
     def lock(self) -> None:
         while True:
             try:
-                os.rename(self.unlocked, self.locked)
+                os.replace(self.unlocked, self.locked)
+                os.touch(self.locked)
+                return
             except FileNotFoundError:
                 if not self.path_init.exists():
                     # no other process has locked this yet
                     open(self.path_init, "w").close()
                     self.write_init_lock()
-                # TODO use inotify to wait for file to appear instead of busy waiting
-                time.sleep(10)
+                    return
+                # find stale locks and remove them, restoring unlocked state from the latest stale lock if possible
+                if not self.cleanup_stale_locks():
+                    # TODO use inotify to wait for file to appear instead of busy waiting?
+                    time.sleep(10)
+
+    def cleanup_stale_locks(self) -> None:
+        current_time = time.time()
+        locks = sorted(self.item_path.parent.glob(self.item_path.with_suffix(f".*{self.item_suffix()}").name), key=lambda lock: lock.stat().st_mtime, reverse=True)
+        if locks[0].stat().st_mtime < current_time - 60:
+            # restore unlock state from the latest lock
+            print(f"Found stale lock {locks[0]} for {self.item()}, restoring unlocked state from it", file=sys.stderr)
+            os.replace(locks[0], self.unlocked)
+            for lock in locks:
+                lock.unlink()
+            return True
+        return False
 
     def unlock(self) -> None:
-        os.rename(self.locked, self.unlocked)
+        try:
+            os.replace(self.locked, self.unlocked)
+        except FileNotFoundError:
+            print(f"Lock file {self.locked} not found when trying to unlock {self.item()}", file=sys.stderr)
 
 
 class DeployManager(LockManager):
@@ -85,6 +106,7 @@ class DeployManager(LockManager):
 
     def locked_deploy(self, snakemake_ver: str) -> None:
         self.lock()
+        print("Deploying Snakemake and dependencies...", file=sys.stderr)
         self.deploy_uv()
         self.deploy_snakemake(snakemake_ver)
         self.unlock()
@@ -105,6 +127,7 @@ class DeployManager(LockManager):
             shell=True,
             check=True,
         )
+        print(f"Deployed Snakemake {snakemake_ver} to {path}", file=sys.stderr)
 
 
 @dataclass
@@ -113,6 +136,10 @@ class HostInfo:
     cpu: int = field(default_factory=os.cpu_count)
     mem_mb: int = field(default_factory=lambda: psutil.virtual_memory().total)
     gpu: int = 0  # TODO determine if the system has a usable GPU
+
+    def asdict(self) -> Dict[str, Any]:
+        # restrict to the fields considered here and avoid leaking in fields from subclasses like QueryableHostInfo
+        return {key: value for key, value in asdict(self).items() if key in {"version", "cpu", "mem_mb", "gpu"}}
 
 
 @dataclass
@@ -130,28 +157,23 @@ class HostInfoManager(LockManager):
         with open(self.locked, "w") as f:
             json.dump(host_info, f)
 
-    @property
-    def path_init(self) -> Path:
-        return Path("/tmp/snakemake_host_info_init.txt")
-
-    @property
-    def locked(self) -> str:
-        return self.path.format(f".{self.id}.locked.")
-
-    @property
-    def unlocked(self) -> str:
-        return self.path.format("")
-
     def lock_and_read(self) -> str:
         self.lock()
-        with open(self.locked, "r") as f:
-            host_info = f.read()
-        print(host_info)
+        try:
+            with open(self.locked, "r") as f:
+                host_info = f.read()
+            # print content to stdout for reading by the caller
+            print(host_info)
+        except Exception:
+            self.unlock()
+            raise
 
     def write_and_unlock(self, host_info: HostInfo) -> None:
-        with open(self.locked, "w") as f:
-            json.dump(host_info.asdict(), f)
-        self.unlock()
+        try:
+            with open(self.locked, "w") as f:
+                json.dump(host_info.asdict(), f)
+        finally:
+            self.unlock()
 
 
 def decode_data(data: str) -> Dict[Any, Any]:
@@ -170,7 +192,7 @@ if __name__ == "__main__":
             host_info_manager.lock_and_read()
         case "write-unlock":
             data = decode_data(args[3])
-            host_info = HostInfo(**json.loads(data))
+            host_info = HostInfo(**data)
             host_info_manager.write_and_unlock(host_info)
         case "unlock":
             host_info_manager.unlock()

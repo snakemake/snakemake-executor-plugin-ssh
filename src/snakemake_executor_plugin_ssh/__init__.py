@@ -1,15 +1,18 @@
+from tenacity import stop_after_attempt
+import shlex
 import base64
 from collections import defaultdict
-from io import StringIO
 from itertools import chain
 import json
 import os
 from pathlib import Path
 import subprocess as sp
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Iterable, List, Generator, Optional
+from typing import Any, AsyncGenerator, Iterable, List, Optional
 import uuid
 from immutables import Map
+from tenacity import retry
+
 from snakemake_interface_executor_plugins.executors.base import SubmittedJobInfo
 from snakemake_interface_executor_plugins.executors.remote import RemoteExecutor
 from snakemake_interface_executor_plugins.settings import (
@@ -39,7 +42,8 @@ class ExecutorSettings(ExecutorSettingsBase):
         metadata={
             "help": (
                 "List of hostnames to spawn jobs to, have to be setup for key-based "
-                "password free login via you ssh config."
+                "password free login via your ssh config. If a custom (not 22) "
+                "port is required, specify it like this: hostname:port"
             ),
             "required": True,
             "nargs": "+",
@@ -51,7 +55,8 @@ class ExecutorSettings(ExecutorSettingsBase):
             "help": (
                 "List of hostnames to spawn jobs to that are for gpu jobs only. "
                 "Have to be setup for key-based "
-                "password free login via you ssh config."
+                "password free login via your ssh config. If a custom (not 22) "
+                "port is required, specify it like this: hostname:port"
             ),
             "required": True,
             "nargs": "+",
@@ -62,6 +67,12 @@ class ExecutorSettings(ExecutorSettingsBase):
         metadata={
             "help": "SSH key file to use (see man ssh, flag -i)",
             "required": False,
+        },
+    )
+    ssh_args: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Additional SSH arguments to use"
         },
     )
 
@@ -98,8 +109,10 @@ common_settings = CommonSettings(
     init_seconds_before_status_checks=0,
 )
 
-
+@dataclass
 class QueryableHostInfo(HostInfo):
+    gpu_only: bool = False
+
     def is_feasible(self, job: JobExecutorInterface) -> bool:
         job_gpu = job.resources.get("gpu", 0)
         if self.gpu_only and not job_gpu:
@@ -149,14 +162,15 @@ class Executor(RemoteExecutor):
         # If required, make sure to pass the job's id to the job_info object, as keyword
         # argument 'external_job_id'.
 
-        with StringIO(self.get_jobscript(job)) as jobscript:
-            host = self._get_host(job)
-            for f in job.output:
-                self.file_to_host[f] = host
-            proc = sp.Popen(
-                ["ssh", host, "bash"], stdin=jobscript, stdout=sp.PIPE, stderr=sp.STDOUT
-            )
-            self.report_job_submission(SubmittedJobInfo(job, aux={"proc": proc}))
+        host = self._get_host(job)
+        for f in job.output:
+            self.file_to_host[f] = host
+        proc = sp.Popen(
+            ["ssh", *self._ssh_args(host), "bash"], stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.STDOUT
+        )
+        proc.stdin.write(self.format_job_exec(job).encode())
+        proc.stdin.close()
+        self.report_job_submission(SubmittedJobInfo(job, aux={"proc": proc}))
 
     async def check_active_jobs(
         self, active_jobs: List[SubmittedJobInfo]
@@ -189,7 +203,7 @@ class Executor(RemoteExecutor):
                 if ret == 0:
                     self.report_job_success(active_job)
                 else:
-                    self.report_job_error(active_job)
+                    self.report_job_error(active_job, msg=proc.stdout.read().decode())
             else:
                 yield active_job
 
@@ -214,55 +228,66 @@ class Executor(RemoteExecutor):
         else:
             return settings.hosts
 
-    def _get_host(self, job: JobExecutorInterface):
+    @retry(stop=stop_after_attempt(3))
+    def _get_host(self, job: JobExecutorInterface) -> str:
         feasible_hosts = {}
-        for host in self.workflow.executor_settings.hosts:
-            host_info = self._lock_and_read_host_info(host)
-            if host_info.is_feasible(job):
-                feasible_hosts[host] = host_info
+        try:
+            for host in self._get_potential_hosts(job):
+                host_info = self._lock_and_read_host_info(host)
+                if host_info.is_feasible(job):
+                    feasible_hosts[host] = host_info
+                else:
+                    self._unlock_host(host)
+
+            host_weight = defaultdict(int)
+            for f in job.input:
+                host = self.file_to_host.get(f)
+                if host is not None and host in feasible_hosts:
+                    host_weight[host] += os.path.getsize(f)
+
+            if host_weight:
+                # At least one file is already present on one host.
+                # Return the host with the largest total input file size present.
+                selected_host = sorted(host_weight, key=host_weight.get, reverse=True)[0]
             else:
-                self._unlock_host(host)
+                # Otherwise, if gpu job prefer gpu only hosts, if not any.
+                # Among them, return the host with least memory used, in order to minimize
+                # out of memory issues in case jobs exceed their annotated memory.
+                def sort_key(item):
+                    host, host_info = item
+                    return (
+                        host not in self.workflow.executor_settings.gpu_only_hosts,
+                        host_info.mem_mb,
+                    )
 
-        host_weight = defaultdict(int)
-        for f in job.input:
-            host = self.file_to_host.get(f)
-            if host is not None and host in feasible_hosts:
-                host_weight[host] += os.path.getsize(f)
+                selected_host = sorted(feasible_hosts.items(), key=sort_key)[0][0]
 
-        if host_weight:
-            # At least one file is already present on one host.
-            # Return the host with the largest total input file size present.
-            selected_host = sorted(host, key=host_weight.get, reverse=True)[0]
-        else:
-            # Otherwise, if gpu job prefer gpu only hosts, if not any.
-            # Among them, return the host with least memory used, in order to minimize
-            # out of memory issues in case jobs exceed their annotated memory.
-            def sort_key(item):
-                host, host_info = item
-                return (
-                    host not in self.workflow.executor_settings.gpu_only_hosts,
-                    host_info.mem_mb,
-                )
-
-            selected_host = sorted(feasible_hosts.items(), key=sort_key)[0]
-
-        for host, host_info in feasible_hosts.items():
-            if host == selected_host:
-                host_info.register(job)
-                self._write_host_info_and_unlock(host, host_info)
-            else:
-                self._unlock_host(host)
+            for host, host_info in feasible_hosts.items():
+                if host == selected_host:
+                    host_info.register(job)
+                    self._write_host_info_and_unlock(host, host_info)
+                else:
+                    self._unlock_host(host)
+            return selected_host
+        except Exception:
+            # Ensure all locked hosts are unlocked on error
+            for host in feasible_hosts:
+                try:
+                    self._unlock_host(host)
+                except Exception:
+                    pass
+            raise
 
     def _lock_and_read_host_info(self, host: str) -> QueryableHostInfo:
         res = self._run_host_mgmt_script(host, "lock-read", run_id=self.run_id)
-        return QueryableHostInfo(**json.load(res.stdout))
+        return QueryableHostInfo(gpu_only=host in self.workflow.executor_settings.gpu_only_hosts, **json.loads(res.stdout))
 
     def _write_host_info_and_unlock(self, host: str, host_info: HostInfo) -> None:
         self._run_host_mgmt_script(
             host,
             "write-unlock",
             run_id=self.run_id,
-            data=base64.b64encode(json.dumps(host_info.asdict()).encode()),
+            data=base64.b64encode(json.dumps(host_info.asdict()).encode()).decode(),
         )
 
     def _unlock_host(self, host: str) -> None:
@@ -280,23 +305,23 @@ class Executor(RemoteExecutor):
 
         return self._run_host_cmd(
             host,
-            f"bash -c 'mkdir -p {self._script_path.parent}; "
-            f"cat > {self._script_path}; "
-            f"python {host_management.SCRIPT_PATH} {cmd} {run_id} {data}'",
+            f"bash -c 'mkdir -p {self._script_path.parent} && "
+            f"cat > {self._script_path} && "
+            f"python {self._script_path} {cmd} {run_id} {data}'",
             input=self.host_info_script.encode(),
         )
 
     def _run_host_cmd(
         self, host: str, cmd: str, **kwargs: Any
     ) -> sp.CompletedProcess[bytes]:
-        identity_file = self.workflow.executor_settings.identity_file
-        identity = "" if identity_file is None else f"-i {identity_file}"
+        
+        self.logger.info(f"Running SSH command on host {host}: {cmd}")
         try:
             return sp.run(
-                f"ssh {identity} {host} {cmd}",
+                f"ssh {' '.join(self._ssh_args(host))} {shlex.quote(cmd)}",
                 check=True,
                 stdout=sp.PIPE,
-                stderr=sp.PIPE,
+                #stderr=sp.PIPE,
                 shell=True,
                 **kwargs,
             )
@@ -304,3 +329,13 @@ class Executor(RemoteExecutor):
             raise WorkflowError(
                 f"Failed to run command on host {host}: {e.stderr.decode()}"
             )
+
+    def _ssh_args(self, host: str) -> List[str]:
+        identity_file = self.workflow.executor_settings.identity_file
+        identity = [] if identity_file is None else ["-i", str(identity_file)]
+        hostname = host.split(":")[0]
+        port = host.split(":")[1] if ":" in host else "22"
+        aux_args = shlex.split(self.workflow.executor_settings.ssh_args) or []
+
+        return ["-p", port, *identity, *aux_args, hostname]
+
