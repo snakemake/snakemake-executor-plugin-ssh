@@ -19,7 +19,6 @@ import subprocess as sp
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Iterable, List, Optional
 import uuid
-from immutables import Map
 from tenacity import retry
 
 from snakemake_interface_executor_plugins.executors.base import SubmittedJobInfo

@@ -25,9 +25,9 @@ sshd-render-config = { cmd = 'jinja2 tests/sshserver/sshd_config.j2 -D cwd="$PWD
 sshd = { cmd = '$(which sshd) -f tests/sshserver/sshd_config -D', depends-on = [
     "sshd-render-config",
 ], default-environment = "dev" }
-format = { cmd = 'ruff format .', default-environment = "dev" }
-lint = { cmd = 'ruff check .', default-environment = "dev" }
-typecheck = { cmd = 'pyrefly check .', default-environment = "dev" }
+format = { cmd = 'ruff format', default-environment = "dev" }
+lint = { cmd = 'ruff check', default-environment = "dev" }
+typecheck = { cmd = 'pyrefly check', default-environment = "dev" }
 test = { cmd = 'pytest -vs', default-environment = "dev" }
 # Below does not work because run-concurrently leads to handing test case...
 #test = { cmd = 'run-concurrently "$(which sshd) -f tests/sshserver/sshd_config -D" "pytest -vs"', depends-on = [
