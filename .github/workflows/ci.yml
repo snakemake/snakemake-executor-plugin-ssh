@@ -35,6 +35,8 @@ jobs:
           chmod 700 tests/sshserver
           chmod 600 tests/sshserver/*
 
+      - run: pixi run sshd
+
       - uses: JarvusInnovations/background-action@v1
         with:
           run: "pixi run sshd"
