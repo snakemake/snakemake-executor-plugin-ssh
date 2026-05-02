@@ -35,11 +35,13 @@ jobs:
           chmod 700 tests/sshserver
           chmod 600 tests/sshserver/*
 
-      - uses: JarvusInnovations/background-action@v1
-        with:
-          run: "pixi run sshd"
-          wait-on: tcp:12478
-          log-output-if: failure
+      - run: pixi run sshd &
+
+      # - uses: JarvusInnovations/background-action@v1
+      #   with:
+      #     run: "pixi run sshd"
+      #     wait-on: tcp:12478
+      #     log-output-if: failure
 
       - name: Run pytest
         run: pixi run test
