@@ -1,3 +1,5 @@
+from types import ModuleType
+import importlib
 import shlex
 from dataclasses import asdict
 from abc import ABC, abstractmethod
@@ -9,7 +11,6 @@ from pathlib import Path
 import sys
 import time
 from typing import Any, Dict
-import psutil
 import subprocess as sp
 
 MIN_PY_VER = "3.7"
@@ -18,6 +19,8 @@ SCRIPT_PATH = BASE_PATH / "script"
 USER_TOOLS_PATH = Path("~/.sshclust")
 UV_EXEC = USER_TOOLS_PATH / "uv"
 VENV_BASE_PATH = USER_TOOLS_PATH / "venvs"
+DEPENDENCIES = ["psutil"]
+DEPENDENCY_PREFIX = (VENV_BASE_PATH / "dependencies").expanduser()
 
 
 BASE_PATH.mkdir(exist_ok=True, parents=True)
@@ -119,6 +122,7 @@ class DeployManager(LockManager):
         print("Deploying Snakemake and dependencies...", file=sys.stderr)
         self.deploy_uv()
         self.deploy_snakemake(snakemake_ver)
+        self.deploy_dependencies()
         self.unlock()
 
     def deploy_uv(self) -> None:
@@ -150,6 +154,19 @@ class DeployManager(LockManager):
                 f"Snakemake {snakemake_ver} already deployed at {path}", file=sys.stderr
             )
 
+    def deploy_dependencies(self) -> None:
+        uv_exec = UV_EXEC.expanduser()
+        prefix = DEPENDENCY_PREFIX
+
+        missing_deps = []
+        for dependency in DEPENDENCIES:
+            try:
+                import_from_prefix(dependency)
+            except ImportError:
+                missing_deps.append(dependency)
+
+        sp.run(f"{uv_exec} pip install {' '.join(missing_deps)} --prefix {prefix}", shell=True, check=True)
+
 
 def get_cpu_count() -> int:
     cpu_count = os.cpu_count()
@@ -159,11 +176,15 @@ def get_cpu_count() -> int:
         raise RuntimeError("Could not determine CPU count")
 
 
+def get_virtual_memory_mb() -> int:
+    import psutil
+    return psutil.virtual_memory().total // (1024 * 1024)
+
 @dataclass
 class HostInfo:
     version: int = 1
     cpu: int = field(default_factory=get_cpu_count)
-    mem_mb: int = field(default_factory=lambda: psutil.virtual_memory().total)
+    mem_mb: int = field(default_factory=get_virtual_memory_mb)
     gpu: int = 0  # TODO determine if the system has a usable GPU
 
     def asdict(self) -> Dict[str, Any]:
@@ -211,6 +232,26 @@ class HostInfoManager(LockManager):
 
 def decode_data(data: str) -> Dict[Any, Any]:
     return json.loads(base64.b64decode(data))
+
+
+def import_from_prefix(module_name) -> ModuleType:
+    major, minor = sys.version_info[:2]
+    module_path = DEPENDENCY_PREFIX / "lib" / f"python{major}.{minor}" / "site-packages" / module_name
+
+    if not module_path.exists():
+        raise ImportError(f"Module {module_name} not found at {module_path}")
+
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+
+    # Add the module to sys.modules (Optional but recommended)
+    # This prevents the module from being re-executed if imported elsewhere
+    sys.modules[module_name] = module
+
+    # 4. Execute the module in its own namespace
+    spec.loader.exec_module(module)
+
+    return module
 
 
 if __name__ == "__main__":
