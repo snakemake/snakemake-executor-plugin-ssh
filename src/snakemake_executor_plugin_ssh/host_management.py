@@ -88,7 +88,7 @@ class LockManager(ABC):
             key=lambda lock: lock.stat().st_mtime,
             reverse=True,
         )
-        if locks[0].stat().st_mtime < current_time - 60:
+        if locks and locks[0].stat().st_mtime < current_time - 60:
             for lock in locks:
                 lock.unlink()
             self.path_init.unlink(missing_ok=True)
