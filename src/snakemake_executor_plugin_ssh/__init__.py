@@ -1,3 +1,10 @@
+from threading import Lock
+from time import time
+from threading import Thread
+from typing import Deque
+from collections import deque
+from snakemake_executor_plugin_ssh.host_management import get_snakemake_venv
+from snakemake_executor_plugin_ssh.host_management import UV_EXEC
 from tenacity import stop_after_attempt
 import shlex
 import base64
@@ -138,18 +145,39 @@ class QueryableHostInfo(HostInfo):
 # Implementation of your executor
 class Executor(RemoteExecutor):
     def __post_init__(self):
-        self.run_id: str = str(uuid.uuid4())
-        self.file_to_host: Map[str, str] = {}
-        with open(host_management.__file__, "r") as f:
-            self.host_info_script = f.read()
+        self._run_id: str = str(uuid.uuid4())
+        self._file_to_host: Map[str, str] = {}
+        self._job_queue: Deque[JobExecutorInterface] = deque()
+        self._job_queue_lock = Lock()
 
-        snakemake_ver = ".".join(snakemake.__version__.split(".")[:3])
+        with open(host_management.__file__, "r") as f:
+            self._host_info_script = f.read()
+
+        self._snakemake_ver = ".".join(snakemake.__version__.split(".")[:3])
 
         # deploy uv to each host
         for host in self.workflow.executor_settings.all_hosts:
             self._run_host_mgmt_script(
-                host, "locked-deploy", self.run_id, data=snakemake_ver
+                host, "locked-deploy", self._run_id, data=self._snakemake_ver
             )
+
+        # start thread that retries queued jobs every 30 seconds
+        self._queue_handler = Thread(target=self._retry_queued_jobs, daemon=True).start()
+
+    def _retry_queued_jobs(self):
+        while True:
+            job = None
+            with self._job_queue_lock:
+                try:
+                    job = self._job_queue.popleft()
+                except IndexError: # empty queue
+                    pass
+            if job is not None:
+                self.run_job(job)
+            time.sleep(30)
+
+    def get_job_exec_prefix(self, job: JobExecutorInterface):
+        return f"source {get_snakemake_venv(self._snakemake_ver)}/bin/activate"
 
     def run_job(self, job: JobExecutorInterface):
         # Implement here how to run a job.
@@ -163,8 +191,13 @@ class Executor(RemoteExecutor):
         # argument 'external_job_id'.
 
         host = self._get_host(job)
+        if host is None:
+            with self._job_queue_lock:
+                self._job_queue.append(job)
+            return
+
         for f in job.output:
-            self.file_to_host[f] = host
+            self._file_to_host[f] = host
         proc = sp.Popen(
             ["ssh", *self._ssh_args(host), "bash"], stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.STDOUT
         )
@@ -229,7 +262,7 @@ class Executor(RemoteExecutor):
             return settings.hosts
 
     @retry(stop=stop_after_attempt(3))
-    def _get_host(self, job: JobExecutorInterface) -> str:
+    def _get_host(self, job: JobExecutorInterface) -> str | None:
         feasible_hosts = {}
         try:
             for host in self._get_potential_hosts(job):
@@ -239,9 +272,12 @@ class Executor(RemoteExecutor):
                 else:
                     self._unlock_host(host)
 
+            if not feasible_hosts:
+                return None
+
             host_weight = defaultdict(int)
             for f in job.input:
-                host = self.file_to_host.get(f)
+                host = self._file_to_host.get(f)
                 if host is not None and host in feasible_hosts:
                     host_weight[host] += os.path.getsize(f)
 
@@ -279,23 +315,23 @@ class Executor(RemoteExecutor):
             raise
 
     def _lock_and_read_host_info(self, host: str) -> QueryableHostInfo:
-        res = self._run_host_mgmt_script(host, "lock-read", run_id=self.run_id)
+        res = self._run_host_mgmt_script(host, "lock-read", run_id=self._run_id)
         return QueryableHostInfo(gpu_only=host in self.workflow.executor_settings.gpu_only_hosts, **json.loads(res.stdout))
 
     def _write_host_info_and_unlock(self, host: str, host_info: HostInfo) -> None:
         self._run_host_mgmt_script(
             host,
             "write-unlock",
-            run_id=self.run_id,
+            run_id=self._run_id,
             data=base64.b64encode(json.dumps(host_info.asdict()).encode()).decode(),
         )
 
     def _unlock_host(self, host: str) -> None:
-        self._run_host_mgmt_script(host, "unlock", run_id=self.run_id)
+        self._run_host_mgmt_script(host, "unlock", run_id=self._run_id)
 
     @property
     def _script_path(self) -> Path:
-        return host_management.SCRIPT_PATH / self.run_id / "host_management.py"
+        return host_management.SCRIPT_PATH / self._run_id / "host_management.py"
 
     def _run_host_mgmt_script(
         self, host: str, cmd: str, run_id: str, data: Optional[str] = None
@@ -308,7 +344,7 @@ class Executor(RemoteExecutor):
             f"bash -c 'mkdir -p {self._script_path.parent} && "
             f"cat > {self._script_path} && "
             f"python {self._script_path} {cmd} {run_id} {data}'",
-            input=self.host_info_script.encode(),
+            input=self._host_info_script.encode(),
         )
 
     def _run_host_cmd(

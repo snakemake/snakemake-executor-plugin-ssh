@@ -1,3 +1,4 @@
+import shlex
 from dataclasses import asdict
 from abc import ABC, abstractmethod
 import base64
@@ -5,7 +6,6 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
-import shutil
 import sys
 import time
 from typing import Any, Dict
@@ -15,14 +15,16 @@ import subprocess as sp
 MIN_PY_VER = "3.7"
 BASE_PATH = Path("/tmp/sshclust")
 SCRIPT_PATH = BASE_PATH / "script"
-VENV_BASE_PATH = Path("~/.sshclust/uv/venv")
+USER_TOOLS_PATH = Path("~/.sshclust")
+UV_EXEC = USER_TOOLS_PATH / "uv"
+VENV_BASE_PATH = USER_TOOLS_PATH / "venvs"
 
 
 BASE_PATH.mkdir(exist_ok=True, parents=True)
 
 
-def get_snakemake_venv(snakemake_ver: str) -> str:
-    return str(VENV_BASE_PATH / "snakemake" / snakemake_ver)
+def get_snakemake_venv(snakemake_ver: str) -> Path:
+    return VENV_BASE_PATH / "snakemake" / snakemake_ver
 
 
 @dataclass
@@ -49,18 +51,18 @@ class LockManager(ABC):
         return self.item_path.with_suffix(".init")
 
     @property
-    def locked(self) -> str:
+    def locked(self) -> Path:
         return self.item_path.with_suffix(f".{self.id}{self.item_suffix()}")
 
     @property
-    def unlocked(self) -> str:
+    def unlocked(self) -> Path:
         return self.item_path.with_suffix(self.item_suffix())
 
     def lock(self) -> None:
         while True:
             try:
                 os.replace(self.unlocked, self.locked)
-                os.touch(self.locked)
+                self.locked.touch()
                 return
             except FileNotFoundError:
                 if not self.path_init.exists():
@@ -68,6 +70,7 @@ class LockManager(ABC):
                     open(self.path_init, "w").close()
                     self.write_init_lock()
                     return
+                print("Waiting for lock to be released...", file=sys.stderr)
                 # find stale locks and remove them, restoring unlocked state from the latest stale lock if possible
                 if not self.cleanup_stale_locks():
                     # TODO use inotify to wait for file to appear instead of busy waiting?
@@ -77,11 +80,9 @@ class LockManager(ABC):
         current_time = time.time()
         locks = sorted(self.item_path.parent.glob(self.item_path.with_suffix(f".*{self.item_suffix()}").name), key=lambda lock: lock.stat().st_mtime, reverse=True)
         if locks[0].stat().st_mtime < current_time - 60:
-            # restore unlock state from the latest lock
-            print(f"Found stale lock {locks[0]} for {self.item()}, restoring unlocked state from it", file=sys.stderr)
-            os.replace(locks[0], self.unlocked)
             for lock in locks:
                 lock.unlink()
+            self.path_init.unlink(missing_ok=True)
             return True
         return False
 
@@ -112,22 +113,31 @@ class DeployManager(LockManager):
         self.unlock()
 
     def deploy_uv(self) -> None:
-        if shutil.which("uv") is None:
+        uv_exec = UV_EXEC.expanduser()
+        if not uv_exec.exists():
+            print(f"uv not found at {uv_exec}, installing...", file=sys.stderr)
+            uv_exec.parent.mkdir(parents=True, exist_ok=True)
             sp.run(
-                "curl -LsSf https://astral.sh/uv/install.sh | sh",
+                "curl -LsSf https://astral.sh/uv/install.sh | "
+                f"env UV_UNMANAGED_INSTALL={shlex.quote(str(uv_exec.parent))} sh",
                 shell=True,
                 check=True,
             )
 
     def deploy_snakemake(self, snakemake_ver: str) -> None:
-        path = get_snakemake_venv(snakemake_ver)
-        sp.run(
-            f"test -d {path} || (uv venv {path} && "
-            f"uv pip install snakemake=={snakemake_ver} pip)",
-            shell=True,
-            check=True,
-        )
-        print(f"Deployed Snakemake {snakemake_ver} to {path}", file=sys.stderr)
+        uv_exec = UV_EXEC.expanduser()
+        path = get_snakemake_venv(snakemake_ver).expanduser()
+        if not path.exists():
+            sp.run(
+                f"test -d {path} || ({uv_exec} venv {path} && "
+                f"source {path}/bin/activate && "
+                f"{uv_exec} pip install snakemake=={snakemake_ver} pip)",
+                shell=True,
+                check=True,
+            )
+            print(f"Deployed Snakemake {snakemake_ver} to {path}", file=sys.stderr)
+        else:
+            print(f"Snakemake {snakemake_ver} already deployed at {path}", file=sys.stderr)
 
 
 @dataclass
