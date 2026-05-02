@@ -165,7 +165,12 @@ class DeployManager(LockManager):
             except ImportError:
                 missing_deps.append(dependency)
 
-        sp.run(f"{uv_exec} pip install {' '.join(missing_deps)} --prefix {prefix}", shell=True, check=True)
+        if missing_deps:
+            sp.run(
+                f"{uv_exec} pip install {' '.join(missing_deps)} --prefix {prefix}",
+                shell=True,
+                check=True,
+            )
 
 
 def get_cpu_count() -> int:
@@ -178,7 +183,9 @@ def get_cpu_count() -> int:
 
 def get_virtual_memory_mb() -> int:
     import psutil
+
     return psutil.virtual_memory().total // (1024 * 1024)
+
 
 @dataclass
 class HostInfo:
@@ -236,7 +243,14 @@ def decode_data(data: str) -> Dict[Any, Any]:
 
 def import_from_prefix(module_name) -> ModuleType:
     major, minor = sys.version_info[:2]
-    module_path = DEPENDENCY_PREFIX / "lib" / f"python{major}.{minor}" / "site-packages" / module_name
+    module_path = (
+        DEPENDENCY_PREFIX
+        / "lib"
+        / f"python{major}.{minor}"
+        / "site-packages"
+        / module_name
+        / "__init__.py"
+    )
 
     if not module_path.exists():
         raise ImportError(f"Module {module_name} not found at {module_path}")
