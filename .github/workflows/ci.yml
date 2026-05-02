@@ -35,6 +35,7 @@ jobs:
         with:
           run: "pixi run sshd"
           wait-on: tcp:12478
+          log-output-if: failure
 
       - name: Run pytest
         run: pixi run test
