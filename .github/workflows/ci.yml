@@ -20,7 +20,7 @@ jobs:
         run: pixi run format --check
       
       - name: Linting
-        run: poetry run lint
+        run: pixi run lint
 
   testing:
     runs-on: ubuntu-latest
