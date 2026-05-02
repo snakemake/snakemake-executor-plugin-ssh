@@ -34,7 +34,7 @@ jobs:
       - uses: JarvusInnovations/background-action@v1
         with:
           run: "pixi run sshd"
-          wait-for: 5s
+          wait-on: tcp:12478
 
       - name: Run pytest
         run: pixi run test
