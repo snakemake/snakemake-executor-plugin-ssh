@@ -37,11 +37,5 @@ jobs:
 
       - run: pixi run sshd &
 
-      # - uses: JarvusInnovations/background-action@v1
-      #   with:
-      #     run: "pixi run sshd"
-      #     wait-on: tcp:12478
-      #     log-output-if: failure
-
       - name: Run pytest
         run: pixi run test
