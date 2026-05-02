@@ -425,7 +425,7 @@ class Executor(RemoteExecutor):
             )
 
     def _ssh_args(self, host: Host) -> List[str]:
-        executor_settings = self.workflow.executor_settings.ssh_args  # type: ignore
+        executor_settings = self.workflow.executor_settings  # type: ignore
         identity_file = executor_settings.identity_file
         identity = [] if identity_file is None else ["-i", str(identity_file)]
         aux_args = shlex.split(executor_settings.ssh_args) or []
