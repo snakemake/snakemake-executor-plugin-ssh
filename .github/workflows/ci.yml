@@ -30,8 +30,10 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0
         with:
           environments: dev
-
-      - run: pixi run sshd
+      
+      - run: |
+          chmod 700 tests/sshserver
+          chmod 600 tests/sshserver/*
 
       - uses: JarvusInnovations/background-action@v1
         with:
