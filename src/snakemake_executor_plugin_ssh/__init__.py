@@ -415,7 +415,7 @@ class Executor(RemoteExecutor):
                 f"ssh {' '.join(self._ssh_args(host))} {shlex.quote(cmd)}",
                 check=True,
                 stdout=sp.PIPE,
-                # stderr=sp.PIPE,
+                stderr=sp.PIPE,
                 shell=True,
                 **kwargs,
             )
