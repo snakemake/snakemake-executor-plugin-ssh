@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Mapping, Optional
 import snakemake.common.tests
@@ -20,17 +21,17 @@ class TestWorkflowsBase(snakemake.common.tests.TestWorkflowsBase):
 
     def get_executor_settings(self) -> Optional[ExecutorSettingsBase]:
         return ExecutorSettings(
-            hosts=["localhost:12478"],
+            hosts=[f"localhost:12478:{os.getcwd()}"],
             identity_file=IDENTITY_FILE,
             ssh_args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
             "-o IdentitiesOnly=yes",
         )
 
     def get_default_storage_provider(self) -> Optional[str]:
-        return "fs"
+        return None
 
     def get_default_storage_prefix(self) -> Optional[str]:
-        return ""
+        return None
 
     def get_default_storage_provider_settings(
         self,

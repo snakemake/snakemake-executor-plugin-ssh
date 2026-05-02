@@ -76,9 +76,15 @@ class LockManager(ABC):
                     # TODO use inotify to wait for file to appear instead of busy waiting?
                     time.sleep(10)
 
-    def cleanup_stale_locks(self) -> None:
+    def cleanup_stale_locks(self) -> bool:
         current_time = time.time()
-        locks = sorted(self.item_path.parent.glob(self.item_path.with_suffix(f".*{self.item_suffix()}").name), key=lambda lock: lock.stat().st_mtime, reverse=True)
+        locks = sorted(
+            self.item_path.parent.glob(
+                self.item_path.with_suffix(f".*{self.item_suffix()}").name
+            ),
+            key=lambda lock: lock.stat().st_mtime,
+            reverse=True,
+        )
         if locks[0].stat().st_mtime < current_time - 60:
             for lock in locks:
                 lock.unlink()
@@ -90,7 +96,10 @@ class LockManager(ABC):
         try:
             os.replace(self.locked, self.unlocked)
         except FileNotFoundError:
-            print(f"Lock file {self.locked} not found when trying to unlock {self.item()}", file=sys.stderr)
+            print(
+                f"Lock file {self.locked} not found when trying to unlock {self.item()}",
+                file=sys.stderr,
+            )
 
 
 class DeployManager(LockManager):
@@ -137,19 +146,33 @@ class DeployManager(LockManager):
             )
             print(f"Deployed Snakemake {snakemake_ver} to {path}", file=sys.stderr)
         else:
-            print(f"Snakemake {snakemake_ver} already deployed at {path}", file=sys.stderr)
+            print(
+                f"Snakemake {snakemake_ver} already deployed at {path}", file=sys.stderr
+            )
+
+
+def get_cpu_count() -> int:
+    cpu_count = os.cpu_count()
+    if cpu_count is not None:
+        return cpu_count
+    else:
+        raise RuntimeError("Could not determine CPU count")
 
 
 @dataclass
 class HostInfo:
     version: int = 1
-    cpu: int = field(default_factory=os.cpu_count)
+    cpu: int = field(default_factory=get_cpu_count)
     mem_mb: int = field(default_factory=lambda: psutil.virtual_memory().total)
     gpu: int = 0  # TODO determine if the system has a usable GPU
 
     def asdict(self) -> Dict[str, Any]:
         # restrict to the fields considered here and avoid leaking in fields from subclasses like QueryableHostInfo
-        return {key: value for key, value in asdict(self).items() if key in {"version", "cpu", "mem_mb", "gpu"}}
+        return {
+            key: value
+            for key, value in asdict(self).items()
+            if key in {"version", "cpu", "mem_mb", "gpu"}
+        }
 
 
 @dataclass
@@ -167,7 +190,7 @@ class HostInfoManager(LockManager):
         with open(self.locked, "w") as f:
             json.dump(host_info, f)
 
-    def lock_and_read(self) -> str:
+    def lock_and_read(self) -> None:
         self.lock()
         try:
             with open(self.locked, "r") as f:
