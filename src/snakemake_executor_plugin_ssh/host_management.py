@@ -78,8 +78,8 @@ class LockManager(ABC):
             except FileNotFoundError:
                 if not self.path_init.exists():
                     # no other process has locked this yet
-                    open(self.path_init, "w").close()
                     self.write_init_lock()
+                    open(self.path_init, "w").close()
                     return
                 print("Waiting for lock to be released...", file=sys.stderr)
                 # find stale locks and remove them, restoring unlocked state from the latest stale lock if possible
