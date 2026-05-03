@@ -257,7 +257,9 @@ class Executor(RemoteExecutor):
             ).encode()
         )
         proc.stdin.close()
-        self.report_job_submission(SubmittedJobInfo(job, aux={"proc": proc}))
+        self.report_job_submission(
+            SubmittedJobInfo(job, aux={"proc": proc, "host": host})
+        )
 
     async def check_active_jobs(self, active_jobs: List[SubmittedJobInfo]):
         # Check the status of active jobs.
@@ -291,6 +293,11 @@ class Executor(RemoteExecutor):
                     self.report_job_success(active_job)
                 else:
                     self.report_job_error(active_job, msg=proc.stdout.read().decode())
+                # update host info to reflect freed resources
+                host: Host = active_job.aux["host"]
+                host_info = self._lock_and_read_host_info(host)
+                host_info.unregister(active_job.job)
+                self._write_host_info_and_unlock(host, host_info)
             else:
                 yield active_job
 
@@ -328,6 +335,11 @@ class Executor(RemoteExecutor):
 
             if not feasible_hosts:
                 return None
+
+            self.logger.info(
+                f"Feasible hosts for job {job.jobid}: "
+                + ", ".join(f"{host} ({info})" for host, info in feasible_hosts.items())
+            )
 
             host_weight = defaultdict(int)
             for f in job.input:
@@ -415,13 +427,13 @@ class Executor(RemoteExecutor):
                 f"ssh {' '.join(self._ssh_args(host))} {shlex.quote(cmd)}",
                 check=True,
                 stdout=sp.PIPE,
-                #stderr=sp.PIPE,
+                # stderr=sp.PIPE,
                 shell=True,
                 **kwargs,
             )
         except sp.CalledProcessError as e:
             raise WorkflowError(
-                f"Failed to run command on host {host}" #: {e.stderr.decode()}"
+                f"Failed to run command on host {host}"  #: {e.stderr.decode()}"
             )
 
     def _ssh_args(self, host: Host) -> List[str]:

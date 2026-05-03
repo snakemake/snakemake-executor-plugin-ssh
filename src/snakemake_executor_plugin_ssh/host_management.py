@@ -210,6 +210,9 @@ class HostInfo:
             if key in {"version", "cpu", "mem_mb", "gpu"}
         }
 
+    def __str__(self) -> str:
+        return f"cpu: {self.cpu}, mem_mb: {self.mem_mb}, gpu: {self.gpu}"
+
 
 @dataclass
 class HostInfoManager(LockManager):
