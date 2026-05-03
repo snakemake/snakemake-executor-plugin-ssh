@@ -415,13 +415,13 @@ class Executor(RemoteExecutor):
                 f"ssh {' '.join(self._ssh_args(host))} {shlex.quote(cmd)}",
                 check=True,
                 stdout=sp.PIPE,
-                stderr=sp.PIPE,
+                #stderr=sp.PIPE,
                 shell=True,
                 **kwargs,
             )
         except sp.CalledProcessError as e:
             raise WorkflowError(
-                f"Failed to run command on host {host}: {e.stderr.decode()}"
+                f"Failed to run command on host {host}" #: {e.stderr.decode()}"
             )
 
     def _ssh_args(self, host: Host) -> List[str]:
