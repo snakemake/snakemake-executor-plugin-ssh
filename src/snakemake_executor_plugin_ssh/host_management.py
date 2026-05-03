@@ -190,7 +190,7 @@ def get_cpu_count() -> int:
 
 
 def get_virtual_memory_mb() -> int:
-    import psutil
+    psutil = import_from_prefix("psutil")
 
     return psutil.virtual_memory().total // (1024 * 1024)
 
