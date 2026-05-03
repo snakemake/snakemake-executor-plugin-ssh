@@ -336,7 +336,7 @@ class Executor(RemoteExecutor):
             if not feasible_hosts:
                 return None
 
-            self.logger.info(
+            self.logger.debug(
                 f"Feasible hosts for job {job.jobid}: "
                 + ", ".join(f"{host} ({info})" for host, info in feasible_hosts.items())
             )
@@ -421,19 +421,19 @@ class Executor(RemoteExecutor):
         self, host: Host, cmd: str, **kwargs: Any
     ) -> sp.CompletedProcess[bytes]:
 
-        self.logger.info(f"Running SSH command on host {host}: {cmd}")
+        self.logger.debug(f"Running SSH command on host {host}: {cmd}")
         try:
             return sp.run(
                 f"ssh {' '.join(self._ssh_args(host))} {shlex.quote(cmd)}",
                 check=True,
                 stdout=sp.PIPE,
-                # stderr=sp.PIPE,
+                stderr=sp.PIPE,
                 shell=True,
                 **kwargs,
             )
         except sp.CalledProcessError as e:
             raise WorkflowError(
-                f"Failed to run command on host {host}"  #: {e.stderr.decode()}"
+                f"Failed to run command on host {host}: {e.stderr.decode()}"
             )
 
     def _ssh_args(self, host: Host) -> List[str]:
