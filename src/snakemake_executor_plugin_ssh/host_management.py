@@ -1,5 +1,6 @@
 from types import ModuleType
 import importlib
+import importlib.util
 import shlex
 from dataclasses import asdict
 from abc import ABC, abstractmethod
@@ -13,7 +14,14 @@ import time
 from typing import Any, Dict
 import subprocess as sp
 
-MIN_PY_VER = "3.7"
+MIN_PY_VER = (3, 7)
+
+if sys.version_info < MIN_PY_VER:
+    raise RuntimeError(
+        f"Python {'.'.join(MIN_PY_VER)} or higher is required, but "
+        f"found {sys.version_info.major}.{sys.version_info.minor}"
+    )
+
 BASE_PATH = Path("/tmp/sshclust")
 SCRIPT_PATH = BASE_PATH / "script"
 USER_TOOLS_PATH = Path("~/.sshclust")
