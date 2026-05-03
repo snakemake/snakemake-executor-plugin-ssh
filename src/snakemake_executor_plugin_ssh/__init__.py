@@ -384,8 +384,14 @@ class Executor(RemoteExecutor):
 
     def _lock_and_read_host_info(self, host: Host) -> QueryableHostInfo:
         res = self._run_host_mgmt_script(host, "lock-read", run_id=self._run_id)
+        try:
+            parsed = json.loads(res.stdout)
+        except json.JSONDecodeError as e:
+            raise WorkflowError(
+                f"Failed to parse JSON host info for host {host}: {res.stdout.decode()}"
+            ) from e
         return QueryableHostInfo(
-            gpu_only=host in self.gpu_only_hosts, **json.loads(res.stdout)
+            gpu_only=host in self.gpu_only_hosts, **parsed
         )
 
     def _write_host_info_and_unlock(self, host: Host, host_info: HostInfo) -> None:
