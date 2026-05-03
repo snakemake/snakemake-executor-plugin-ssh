@@ -151,7 +151,7 @@ class DeployManager(LockManager):
         if not path.exists():
             sp.run(
                 f"test -d {path} || ({uv_exec} venv {path} && "
-                f"source {path}/bin/activate && "
+                f". {path}/bin/activate && "
                 f"{uv_exec} pip install snakemake=={snakemake_ver} pip)",
                 shell=True,
                 check=True,

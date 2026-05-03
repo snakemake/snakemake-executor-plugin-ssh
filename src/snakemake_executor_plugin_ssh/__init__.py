@@ -222,7 +222,7 @@ class Executor(RemoteExecutor):
             time.sleep(30)
 
     def get_job_exec_prefix(self, job: JobExecutorInterface) -> str:
-        return f"source {get_snakemake_venv(self._snakemake_ver)}/bin/activate"
+        return f". {get_snakemake_venv(self._snakemake_ver)}/bin/activate"
 
     def run_job(self, job: JobExecutorInterface):
         # Implement here how to run a job.
